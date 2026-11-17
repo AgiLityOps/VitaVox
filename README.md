@@ -8,6 +8,12 @@
 
 Version **00.39**. Title ID `VVOX00001`. There is no server, sync, streaming, or network code in the app.
 
+## AI disclosure
+
+This project was developed with Grok, an AI assistant.
+
+> **Note:** I built this with a lot of help from an AI assistant (Grok Bot), which wrote most of the code while I directed it, tested every build on my own Vita, and decided what went in. It's been tested on real hardware, but if you spot anything odd, please let me know.
+
 ## Fork of ABSvita
 
 This is a fork of [ABSvita](https://github.com/DarthTigerson/ABSvita) by [DarthTigerson](https://github.com/DarthTigerson), released under the MIT License. The original copyright and licence are kept in [`LICENSE`](LICENSE).
@@ -245,3 +251,5 @@ Vita Vox is **MIT**, following ABSvita. See [`LICENSE`](LICENSE) (copyright Dart
 | [cJSON](https://github.com/DaveGamble/cJSON) | MIT (`vendor/cjson/`) |
 | [stb](https://github.com/nothings/stb) (`stb_image`) | MIT / public domain (`vendor/stb/`) |
 | [Manrope](https://github.com/sharanda/manrope) | SIL Open Font License 1.1 (`assets/fonts/OFL.txt`) |
+
+Code for this fork was written with the help of Grok (Grok Bot), an AI assistant; see [AI disclosure](#ai-disclosure).
