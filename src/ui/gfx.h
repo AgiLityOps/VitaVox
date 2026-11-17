@@ -1,7 +1,7 @@
 /* Drawing layer over vita2d: theme colours, fonts (one vita2d font per size),
  * ink-centred text, rounded shapes, icons and PlayStation button glyphs. */
-#ifndef ABSVITA_GFX_H
-#define ABSVITA_GFX_H
+#ifndef VITAVOX_GFX_H
+#define VITAVOX_GFX_H
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -59,9 +59,14 @@ void gfx_fit(FontW w, int size, const char *s, float max_w, char *out, int n);
 int gfx_wrap(FontW w, int size, float x, float y, float max_w, float line_h, int max_lines, uint32_t c, const char *s);
 /* Lines s would wrap into. */
 int gfx_wrap_count(FontW w, int size, float max_w, const char *s);
+/* 00.38: the lines gfx_wrap would draw (no ellipsis), as byte ranges of s; empty
+ * lines have len 0. start/len may be NULL to count only. Returns the line count. */
+int gfx_wrap_layout(FontW w, int size, float max_w, const char *s, int *start, int *len, int max_lines);
 
 /* Icon centred on (cx, cy), box size px. */
 void gfx_icon(int id, float cx, float cy, float size, uint32_t c);
+/* App logo (headphones around a book) centred on (cx, cy), box size px. */
+void gfx_logo(float cx, float cy, float size);
 
 typedef enum { G_CROSS, G_CIRCLE, G_SQUARE, G_TRIANGLE, G_L, G_R, G_START, G_SELECT, G_DPAD } Glyph;
 /* Button glyph centred on (cx, cy); returns its width. */

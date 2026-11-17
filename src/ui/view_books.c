@@ -1,4 +1,4 @@
-/* Book grids: the Library, a series' or author's books, and Search. */
+/* Book grids and lists: the Library, a series' or author's books, and Search. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +27,7 @@ typedef struct {
     Scroll sc;
     char query[128];
     bool want_keyboard;
+    bool list;         /* G_FIXED (an author's books): this visit only, default grid */
 } Grid;
 
 static SortMode g_sort = SORT_TITLE;
@@ -39,6 +40,42 @@ static const int *items(Grid *g, int *n) {
 }
 
 static float grid_top(Grid *g) { return HEAD_H + (g->kind == G_SEARCH ? 64 : 0); }
+
+static bool is_list(const Grid *g) {
+    if (g->kind == G_LIBRARY) return g_cfg.list_view_library;
+    if (g->kind == G_SEARCH) return g_cfg.list_view_search;
+    return g->list;
+}
+
+/* Keep the focused item on screen when switching list/grid (by index, not pixel Y). */
+static void snap_focus(Grid *g, int n, bool was_list, float screen_off) {
+    bool list = is_list(g);
+    float top = grid_top(g), view = CONTENT_BOTTOM - top;
+    float rh = list ? LIST_ROW : CELL_H;
+    int row = list ? (g->focus < 0 ? 0 : g->focus) : (g->focus < 0 ? 0 : g->focus / COLS);
+    int rows = list ? n : (n + COLS - 1) / COLS;
+    float max = rows * rh - view + 16;
+    if (max < 0) max = 0;
+    scroll_jump(&g->sc, row * rh - screen_off, max);
+}
+
+static void toggle_list(Grid *g, int n) {
+    bool was = is_list(g);
+    float rh = was ? LIST_ROW : CELL_H;
+    int row = was ? (g->focus < 0 ? 0 : g->focus) : (g->focus < 0 ? 0 : g->focus / COLS);
+    float screen_off = row * rh - g->sc.y;
+    if (g->kind == G_LIBRARY) {
+        g_cfg.list_view_library = !g_cfg.list_view_library;
+        app_save_config();
+    } else if (g->kind == G_SEARCH) {
+        g_cfg.list_view_search = !g_cfg.list_view_search;
+        app_save_config();
+    } else {
+        g->list = !g->list;
+    }
+    app_toast(is_list(g) ? "List view" : "Grid view");
+    snap_focus(g, n, was, screen_off);
+}
 
 static void open_focused(Grid *g, bool play) {
     int n;
@@ -78,65 +115,69 @@ static void grid_update(View *v, const Input *in, float dt) {
                 str_copy(g->query, sizeof g->query, out);
                 run_search(g);
                 g->focus = g->n ? 0 : -1;
-                g->sc.target = 0;
+                scroll_to(&g->sc, 0);
             }
+            app_select_hold(in, dt, false);
             return;
         }
     }
     int n;
     const int *idx = items(g, &n);
     (void)idx;
+    int sel = app_select_hold(in, dt, true);
+    if (sel == 2) toggle_list(g, n);
+    else if (sel == 1 && g->kind == G_LIBRARY) {
+        g_sort = (SortMode)((g_sort + 1) % SORT_COUNT);
+        g->focus = 0;
+        scroll_to(&g->sc, 0);
+    }
     if (!n && g->kind == G_LIBRARY && lib_state() == LIB_ERROR && in->down & B_OK) lib_refresh();
     int f = g->focus;
+    bool list = is_list(g);
     if (f < 0) { /* search field */
         if (in->down & B_OK) ime_open("Search", g->query, 100, IME_TEXT);
         if (in->repeat & B_DOWN && n) g->focus = 0;
         if (in->repeat & B_LEFT || in->down & B_BACK) app_focus_sidebar();
         return;
     }
-    if (in->repeat & B_RIGHT && f + 1 < n && (f + 1) % COLS) f++;
-    if (in->repeat & B_LEFT) { if (f % COLS == 0) { app_focus_sidebar(); return; } f--; }
-    if (in->repeat & B_DOWN) f = f + COLS < n ? f + COLS : (f / COLS < (n - 1) / COLS ? n - 1 : f);
-    if (in->repeat & B_UP) {
-        if (f >= COLS) f -= COLS;
-        else if (g->kind == G_SEARCH) f = -1;
+    if (list) {
+        if (in->repeat & B_DOWN && f + 1 < n) f++;
+        if (in->repeat & B_UP) {
+            if (f > 0) f--;
+            else if (g->kind == G_SEARCH) f = -1;
+        }
+        if (in->repeat & B_LEFT) { app_focus_sidebar(); return; }
+    } else {
+        if (in->repeat & B_RIGHT && f + 1 < n && (f + 1) % COLS) f++;
+        if (in->repeat & B_LEFT) { if (f % COLS == 0) { app_focus_sidebar(); return; } f--; }
+        if (in->repeat & B_DOWN) f = f + COLS < n ? f + COLS : (f / COLS < (n - 1) / COLS ? n - 1 : f);
+        if (in->repeat & B_UP) {
+            if (f >= COLS) f -= COLS;
+            else if (g->kind == G_SEARCH) f = -1;
+        }
     }
     if (n && f >= n) f = n - 1;
     g->focus = f;
     if (in->down & B_OK) open_focused(g, false);
     if (in->down & B_SQUARE) open_focused(g, true);
     if (in->down & B_BACK) app_pop();
-    if (in->down & B_SELECT && g->kind == G_LIBRARY) {
-        g_sort = (SortMode)((g_sort + 1) % SORT_COUNT);
-        g->focus = 0;
-        g->sc.target = 0;
-    }
+    float rh = list ? LIST_ROW : CELL_H;
+    int rows = list ? n : (n + COLS - 1) / COLS;
+    float max = rows * rh - (CONTENT_BOTTOM - grid_top(g)) + 16;
+    if (max < 0) max = 0;
     if (in->dragging) {
-        int rows = (n + COLS - 1) / COLS;
-        float max = rows * CELL_H - (CONTENT_BOTTOM - grid_top(g)) + 16;
-        scroll_drag(&g->sc, in->drag_dy, max > 0 ? max : 0);
+        scroll_drag(&g->sc, in->drag_dy, max);
     } else if (g->focus >= 0) {
-        int row = g->focus / COLS, rows = (n + COLS - 1) / COLS;
-        float max = rows * CELL_H - (CONTENT_BOTTOM - grid_top(g)) + 16;
-        scroll_show(&g->sc, row * CELL_H - (row ? 24 : 0), (row + 1) * CELL_H + 8, CONTENT_BOTTOM - grid_top(g), max > 0 ? max : 0);
+        int row = list ? g->focus : g->focus / COLS;
+        scroll_show(&g->sc, row * rh - (row ? 24 : 0), (row + 1) * rh + 8, CONTENT_BOTTOM - grid_top(g), max);
     }
 }
 
 static void draw_state(Grid *g) {
     float cy = (grid_top(g) + CONTENT_BOTTOM) / 2, cx = CX + CW / 2;
     LibState st = lib_state();
-    if (g->kind == G_LIBRARY && (st == LIB_LOADING || st == LIB_EMPTY)) {
-        draw_spinner(cx, cy - 30, 18, C_ACCENT);
-        int done, total;
-        lib_progress(&done, &total);
-        char t[64];
-        if (total) snprintf(t, sizeof t, "Loading your library\xE2\x80\xA6 %d / %d", done, total);
-        else snprintf(t, sizeof t, "Loading your library\xE2\x80\xA6");
-        gfx_text_center(F_REG, 17, cx, cy + 20, C_SUB, t);
-    } else if (g->kind == G_LIBRARY && st == LIB_ERROR) {
-        gfx_icon(IC_CLOUD_OFF, cx, cy - 34, 40, C_ERROR);
-        gfx_text_center(F_BOLD, 19, cx, cy + 14, C_TEXT, lib_error());
-        gfx_text_center(F_REG, 16, cx, cy + 44, C_SUB, "Check your Wi-Fi, then try again");
+    if (g->kind == G_LIBRARY && (st == LIB_LOADING || st == LIB_EMPTY || st == LIB_ERROR || (st == LIB_READY && lib_count() == 0))) {
+        draw_library_empty(cx, cy, false);
     } else if (g->kind == G_SEARCH) {
         gfx_text_center(F_REG, 17, cx, cy, C_SUB, g->query[0] ? "No books match" : "Search titles, authors and series");
     } else {
@@ -169,8 +210,26 @@ static void grid_draw(View *v, bool focused) {
     }
 
     float top = grid_top(g);
+    bool list = is_list(g);
     if (!n || !idx) {
         draw_state(g);
+    } else if (list) {
+        clip_content(top - 6);
+        int first = (int)(g->sc.y / LIST_ROW), last = first + (int)((CONTENT_BOTTOM - top) / LIST_ROW) + 2;
+        if (first < 0) first = 0;
+        for (int i = first; i <= last && i < n; i++) {
+            float y = top + i * LIST_ROW - g->sc.y;
+            const BookSummary *b = lib_book(idx[i]);
+            if (!b) continue;
+            char badge[16], *bad = NULL;
+            if (g->seq && g->seq[i] >= 0) {
+                snprintf(badge, sizeof badge, "%g", g->seq[i]);
+                bad = badge;
+            }
+            draw_book_row(b, CX, y, CW, focused && g->focus == i, bad);
+            if (y + LIST_ROW > top && y < CONTENT_BOTTOM) hit_add(CX, y, CW, LIST_ROW - 8, on_tap_cell, i, 0);
+        }
+        clip_off();
     } else {
         clip_content(top - 6);
         int first_row = (int)(g->sc.y / CELL_H), last_row = (int)((g->sc.y + CONTENT_BOTTOM - top) / CELL_H) + 1;
@@ -201,7 +260,8 @@ static void grid_draw(View *v, bool focused) {
             hint(G_SQUARE, "Play");
         }
         if (g->kind == G_LIBRARY && !n && lib_state() == LIB_ERROR) hint(g_ok(), "Try again");
-        if (g->kind == G_LIBRARY) hint(G_SELECT, "Sort");
+        if (g->kind == G_LIBRARY) hint(G_SELECT, "Sort (hold) View");
+        else hint(G_SELECT, "(hold) View");
         hint(g_back(), "Back");
     }
 }

@@ -8,9 +8,6 @@ tests/fixtures/media/
 tests/media/
 .DS_Store
 
-# local notes and planning docs (not published)
-docs/
-
 # editors / OS
 .vscode/
 .idea/
@@ -18,3 +15,14 @@ docs/
 .claude/
 build-test/
 tests/showcase/
+
+/build/
+/build-host/
+/build-test/
+/third_party/ffmpeg/
+*.self
+*.vpk
+*.velf
+
+# Built VPKs kept outside build/
+/releases/

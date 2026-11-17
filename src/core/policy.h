@@ -1,6 +1,6 @@
 /* Playback policies: when to sync progress, and the sleep timer. */
-#ifndef ABSVITA_POLICY_H
-#define ABSVITA_POLICY_H
+#ifndef VITAVOX_POLICY_H
+#define VITAVOX_POLICY_H
 #include <stdbool.h>
 
 typedef struct {

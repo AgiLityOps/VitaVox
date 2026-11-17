@@ -1,7 +1,7 @@
 /* Minimal host test harness. Each test_*.c defines TEST(name) functions and a
  * suite function registered in tests/main.c. */
-#ifndef ABSVITA_TEST_H
-#define ABSVITA_TEST_H
+#ifndef VITAVOX_TEST_H
+#define VITAVOX_TEST_H
 #include <math.h>
 #include <stdio.h>
 #include <string.h>

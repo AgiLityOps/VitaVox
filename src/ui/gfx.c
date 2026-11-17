@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "textwrap.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -67,6 +68,7 @@ typedef struct { int id, size; vita2d_texture *t; } IconTex;
 #define MAX_ICON_TEX 160
 static IconTex g_icons[MAX_ICON_TEX];
 static int g_nicons;
+static vita2d_texture *g_logo;
 
 static vita2d_texture *icon_tex(int id, int size) {
     for (int i = 0; i < g_nicons; i++)
@@ -95,6 +97,9 @@ int gfx_init(const char *font_dir) {
     g_font_data[F_REG] = slurp(path, &g_font_len[F_REG]);
     snprintf(path, sizeof path, "%s/Manrope-700.ttf", font_dir);
     g_font_data[F_BOLD] = slurp(path, &g_font_len[F_BOLD]);
+    /* font_dir is app0:assets; the header logo lives alongside the fonts */
+    snprintf(path, sizeof path, "%s/logo.png", font_dir);
+    g_logo = vita2d_load_PNG_file(path);
     return g_font_data[0] && g_font_data[1] ? 0 : -1;
 }
 
@@ -103,6 +108,8 @@ void gfx_exit(void) {
         for (int i = 0; i < MAX_SIZES; i++)
             if (g_fonts[w][i].f) vita2d_free_font(g_fonts[w][i].f);
     for (int i = 0; i < g_nicons; i++) vita2d_free_texture(g_icons[i].t);
+    if (g_logo) vita2d_free_texture(g_logo);
+    g_logo = NULL;
 }
 
 uint32_t gfx_alpha(uint32_t c, float a) {
@@ -259,35 +266,21 @@ void gfx_fit(FontW w, int size, const char *s, float max_w, char *out, int n) {
     out[0] = 0;
 }
 
-/* Next line of s starting at *pos that fits max_w; returns its byte length. */
-static int next_line(FontW w, int size, const char *s, int pos, float max_w, char *line, int n) {
-    int best = -1, i = pos;
-    while (s[i] == ' ') i++;
-    int start = i;
-    for (;;) {
-        while (s[i] && s[i] != ' ' && s[i] != '\n') i++;
-        int len = i - start;
-        if (len >= n) len = n - 1;
-        memcpy(line, s + start, len);
-        line[len] = 0;
-        if (gfx_text_w(w, size, line) > max_w && best >= 0) break;
-        best = i;
-        if (!s[i] || s[i] == '\n') break;
-        i++;
-    }
-    int len = best - start;
-    if (len >= n) len = n - 1;
-    memcpy(line, s + start, len);
-    line[len] = 0;
-    return best - pos;
+/* 00.38: the line breaking lives in core/textwrap.c (host-tested). */
+typedef struct { FontW w; int size; } WrapFont;
+static float wrap_measure(const char *t, void *ud) {
+    const WrapFont *f = ud;
+    return (float)gfx_text_w(f->w, f->size, t);
 }
 
 int gfx_wrap(FontW w, int size, float x, float y, float max_w, float line_h, int max_lines, uint32_t c, const char *s) {
     if (!s) return 0;
+    WrapFont f = {w, size};
     char line[512];
     int pos = 0, lines = 0, slen = (int)strlen(s);
     while (pos < slen && lines < max_lines) {
-        int used = next_line(w, size, s, pos, max_w, line, sizeof line);
+        if (s[pos] == '\n') { pos++; lines++; continue; } /* 00.38: an empty line (paragraph break) */
+        int used = wrap_next_line(wrap_measure, &f, s, pos, max_w, line, sizeof line);
         if (used <= 0) break;
         pos += used;
         if (s[pos] == '\n') pos++;
@@ -303,17 +296,12 @@ int gfx_wrap(FontW w, int size, float x, float y, float max_w, float line_h, int
 }
 
 int gfx_wrap_count(FontW w, int size, float max_w, const char *s) {
-    if (!s) return 0;
-    char line[512];
-    int pos = 0, lines = 0, slen = (int)strlen(s);
-    while (pos < slen && lines < 999) {
-        int used = next_line(w, size, s, pos, max_w, line, sizeof line);
-        if (used <= 0) break;
-        pos += used;
-        if (s[pos] == '\n') pos++;
-        lines++;
-    }
-    return lines;
+    return gfx_wrap_layout(w, size, max_w, s, NULL, NULL, 999);
+}
+
+int gfx_wrap_layout(FontW w, int size, float max_w, const char *s, int *start, int *len, int max_lines) {
+    WrapFont f = {w, size};
+    return wrap_layout(wrap_measure, &f, max_w, s, start, len, max_lines);
 }
 
 /* ---- icons and glyphs ----------------------------------------------------------- */
@@ -324,6 +312,22 @@ void gfx_icon(int id, float cx, float cy, float size, uint32_t c) {
     if (!t) return;
     float x = (float)(int)lroundf(cx - px / 2.0f), y = (float)(int)lroundf(cy - px / 2.0f);
     vita2d_draw_texture_tint(t, x, y, c);
+}
+
+void gfx_logo(float cx, float cy, float size) {
+    int px = (int)lroundf(size);
+    float x = (float)(int)lroundf(cx - px / 2.0f);
+    float y = (float)(int)lroundf(cy - px / 2.0f);
+    if (!g_logo) {
+        gfx_icon(IC_BOOK, cx, cy, size, C_ACCENT);
+        return;
+    }
+    unsigned tw = vita2d_texture_get_width(g_logo);
+    unsigned th = vita2d_texture_get_height(g_logo);
+    if (tw == (unsigned)px && th == (unsigned)px)
+        vita2d_draw_texture(g_logo, x, y);
+    else
+        vita2d_draw_texture_scale(g_logo, x, y, size / (float)tw, size / (float)th);
 }
 
 static const uint32_t kGlyphColour[4] = {

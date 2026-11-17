@@ -2,31 +2,11 @@
 
 #include "color.h"
 #include "library.h"
-#include "mp3.h"
 #include "image.h"
 #include "test.h"
-#include "url.h"
+#include <stdio.h>
+#include <string.h>
 
-TEST(url_join_and_valid) {
-    char b[128];
-    url_join("http://192.168.1.10:13378/audiobookshelf/", "/api/me", b, sizeof b);
-    CHECK_STR(b, "http://192.168.1.10:13378/audiobookshelf/api/me");
-    url_join("http://h:1", "login", b, sizeof b);
-    CHECK_STR(b, "http://h:1/login");
-    CHECK(url_join("http://h", "x", b, 5) < 0);
-    CHECK(url_valid("http://192.168.1.10:13378/audiobookshelf"));
-    CHECK(url_valid("http://abs.local"));
-    CHECK(!url_valid("https://abs.local"));
-    CHECK(!url_valid("http://:80"));
-    CHECK(!url_valid("http://host:99999"));
-    CHECK(!url_valid("http://ho st"));
-    CHECK(!url_valid("192.168.1.1"));
-    char n[128] = "  192.168.1.10:13378/audiobookshelf/ ";
-    url_normalize(n, sizeof n);
-    CHECK_STR(n, "http://192.168.1.10:13378/audiobookshelf");
-    url_encode("a b&c/é", b, sizeof b);
-    CHECK_STR(b, "a%20b%26c%2F%C3%A9");
-}
 TEST(accent_colour) {
     uint8_t px[16 * 16 * 4];
     for (int i = 0; i < 256; i++) { px[i * 4] = 20; px[i * 4 + 1] = 40; px[i * 4 + 2] = 200; px[i * 4 + 3] = 255; }
@@ -48,9 +28,20 @@ TEST(crop_resize) {
     CHECK_EQ_INT(out[0], 105);
     CHECK_EQ_INT(out[3], 255);
 }
+TEST(crop_resize_alpha_weighted) {
+    /* 2x2 RGBA: opaque red column + fully transparent black column -> 1 px:
+     * red at half alpha (no dark fringe). */
+    uint8_t src[4 * 4] = { 255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0 };
+    uint8_t out[4];
+    img_crop_resize(src, 2, 2, 4, out, 1);
+    CHECK_EQ_INT(out[0], 255); CHECK_EQ_INT(out[1], 0); CHECK_EQ_INT(out[3], 127);
+    uint8_t clear[4] = { 9, 9, 9, 0 };
+    img_crop_resize(clear, 1, 1, 4, out, 1);
+    CHECK_EQ_INT(out[3], 0);
+}
 TEST(library_sort_filter) {
     BookSummary b[4] = {
-        {.id = "1", .title = "The Hobbit", .author = "Tolkien", .added_at = 5},
+        {.id = "1", .title = "The Odyssey", .author = "Homer", .added_at = 5},
         {.id = "2", .title = "Dune", .author = "Herbert", .added_at = 9},
         {.id = "3", .title = "an Echo", .author = "", .added_at = 1},
         {.id = "4", .title = "Circe", .author = "Miller", .series = "Greek", .added_at = 7},
@@ -62,49 +53,64 @@ TEST(library_sort_filter) {
     CHECK_EQ_INT(idx[0], 1); CHECK_EQ_INT(idx[3], 2);
     lib_sort(b, idx, 4, SORT_RECENT);
     CHECK_EQ_INT(idx[0], 1); CHECK_EQ_INT(idx[1], 3);
-    CHECK_EQ_INT(lib_filter(b, idx, 4, "TOLK", out), 1);
+    CHECK_EQ_INT(lib_filter(b, idx, 4, "HOMER", out), 1);
     CHECK_EQ_INT(out[0], 0);
     CHECK_EQ_INT(lib_filter(b, idx, 4, "greek", out), 1);
     CHECK_EQ_INT(lib_filter(b, idx, 4, "", out), 4);
     CHECK_EQ_INT(lib_find(b, 4, "3"), 2);
     CHECK_EQ_INT(lib_find(b, 4, "x"), -1);
 }
-TEST(mp3_headers) {
-    uint8_t h[4] = {0xFF, 0xFB, 0x50, 0xC4}; /* MPEG1 L3 64 kbps 44.1k mono */
-    Mp3Frame f;
-    CHECK_EQ_INT(mp3_parse_header(h, &f), 0);
-    CHECK_EQ_INT(f.version, 1); CHECK_EQ_INT(f.bitrate, 64); CHECK_EQ_INT(f.sample_rate, 44100);
-    CHECK_EQ_INT(f.channels, 1); CHECK_EQ_INT(f.frame_bytes, 208);
-    uint8_t bad[4] = {0xFF, 0xFB, 0xF0, 0};
-    CHECK(mp3_parse_header(bad, &f) != 0);
-    uint8_t id3[10] = {'I', 'D', '3', 4, 0, 0, 0, 0, 0x02, 0x01};
-    CHECK_EQ_INT(mp3_id3_size(id3, 10), 257 + 10);
+static int title_pos(const BookSummary *b, const int *idx, int n, const char *title) {
+    for (int i = 0; i < n; i++)
+        if (!strcmp(b[idx[i]].title, title)) return i;
+    return -1;
 }
-static void probe_file(const char *p, int vbr) {
-    Reader r; FileReaderCtx fc;
-    if (reader_file_open(&r, &fc, p, 0, 0) != 0) { printf("  (fixture %s missing, skipped)\n", p); return; }
-    Mp3Info info;
-    CHECK_EQ_INT(mp3_probe(&r, &info), 0);
-    CHECK_EQ_INT(info.sample_rate, 44100);
-    CHECK_NEAR(info.duration, 12.0, 0.15);
-    CHECK(info.audio_start > 0); /* ID3 tag or Xing frame skipped */
-    if (vbr) CHECK(info.has_toc);
-    uint64_t mid = mp3_offset_for_time(&info, 6.0);
-    CHECK(mid > info.audio_start + info.audio_bytes * 0.4 && mid < info.audio_start + info.audio_bytes * 0.6);
-    CHECK_EQ_INT(mp3_offset_for_time(&info, -1), info.audio_start);
-    CHECK_EQ_INT(mp3_offset_for_time(&info, 99), info.audio_start + info.audio_bytes);
-    reader_file_close(&fc);
+TEST(library_title_sort_numbers) {
+    static const char *titles[] = {
+        "The Count of Monte Cristo 10", "The Count of Monte Cristo 07", "The Count of Monte Cristo 1",
+        "Book 10", "book 9", "The Book 2",
+        "Vol. 10", "Vol. 2", "vol. 1",
+        "a Canterbury Tale", "Zebra", "Book",
+    };
+    enum { N = sizeof titles / sizeof *titles };
+    BookSummary b[N];
+    int idx[N];
+    memset(b, 0, sizeof b);
+    for (int i = 0; i < N; i++) {
+        snprintf(b[i].id, sizeof b[i].id, "%d", i);
+        snprintf(b[i].title, sizeof b[i].title, "%s", titles[i]);
+        idx[i] = i;
+    }
+    lib_sort(b, idx, N, SORT_TITLE);
+    /* Monte Cristo 1 < 07 < 10 */
+    CHECK(title_pos(b, idx, N, "The Count of Monte Cristo 1") < title_pos(b, idx, N, "The Count of Monte Cristo 07"));
+    CHECK(title_pos(b, idx, N, "The Count of Monte Cristo 07") < title_pos(b, idx, N, "The Count of Monte Cristo 10"));
+    /* "Book" < "The Book 2" (article ignored) < "book 9" (case ignored) < "Book 10" */
+    CHECK(title_pos(b, idx, N, "Book") < title_pos(b, idx, N, "The Book 2"));
+    CHECK(title_pos(b, idx, N, "The Book 2") < title_pos(b, idx, N, "book 9"));
+    CHECK(title_pos(b, idx, N, "book 9") < title_pos(b, idx, N, "Book 10"));
+    CHECK(title_pos(b, idx, N, "vol. 1") < title_pos(b, idx, N, "Vol. 2"));
+    CHECK(title_pos(b, idx, N, "Vol. 2") < title_pos(b, idx, N, "Vol. 10"));
+    /* "a Canterbury Tale" sorts as Canterbury: after Book*, before Count*; Zebra last */
+    CHECK(title_pos(b, idx, N, "Book 10") < title_pos(b, idx, N, "a Canterbury Tale"));
+    CHECK(title_pos(b, idx, N, "a Canterbury Tale") < title_pos(b, idx, N, "The Count of Monte Cristo 1"));
+    CHECK_EQ_INT(title_pos(b, idx, N, "Zebra"), N - 1);
+    CHECK_EQ_INT(title_pos(b, idx, N, "Book"), 0);
+    /* "Book 02" and "Book 2" compare equal naturally: still a fixed order */
+    BookSummary e[2];
+    memset(e, 0, sizeof e);
+    snprintf(e[0].title, sizeof e[0].title, "Book 2");
+    snprintf(e[1].title, sizeof e[1].title, "Book 02");
+    int ei[2] = {0, 1}, ej[2] = {1, 0};
+    lib_sort(e, ei, 2, SORT_TITLE);
+    lib_sort(e, ej, 2, SORT_TITLE);
+    CHECK_EQ_INT(ei[0], ej[0]);
+    CHECK_EQ_INT(ei[0], 1); /* "Book 02" < "Book 2" by the plain fallback */
 }
-TEST(mp3_probe_fixtures) {
-    probe_file("tests/fixtures/media/cbr.mp3", 0);
-    probe_file("tests/fixtures/media/vbr.mp3", 1);
-}
-
 void suite_utils(void) {
-    RUN(url_join_and_valid);
     RUN(accent_colour);
     RUN(crop_resize);
+    RUN(crop_resize_alpha_weighted);
     RUN(library_sort_filter);
-    RUN(mp3_headers);
-    RUN(mp3_probe_fixtures);
+    RUN(library_title_sort_numbers);
 }

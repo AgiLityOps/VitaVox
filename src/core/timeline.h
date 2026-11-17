@@ -1,6 +1,6 @@
 /* Book time <-> (track, local time) mapping and chapter navigation. */
-#ifndef ABSVITA_TIMELINE_H
-#define ABSVITA_TIMELINE_H
+#ifndef VITAVOX_TIMELINE_H
+#define VITAVOX_TIMELINE_H
 #include "models.h"
 
 /* Track index containing book time t (clamped to [0, duration]); *local is

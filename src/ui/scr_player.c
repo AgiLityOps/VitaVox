@@ -7,13 +7,14 @@
 #include <vita2d.h>
 
 #include "covers.h"
-#include "downloads.h"
+#include "dbg.h"
 #include "libmodel.h"
 #include "engine.h"
 #include "player.h"
 #include "strutil.h"
 #include "sys.h"
 #include "timeline.h"
+#include "touchmath.h"
 #include "views.h"
 
 #define COVER 316.0f
@@ -27,19 +28,35 @@
 #define PILL_H 42.0f
 
 enum { K_BACK, K_PREV, K_PLAY, K_NEXT, K_FWD };
-enum { P_SPEED, P_SLEEP, P_CHAPTERS, P_DOWNLOAD, P_INFO, P_COUNT };
+enum { P_SPEED, P_SLEEP, P_CHAPTERS, P_INFO, P_COUNT };
 
 static struct {
     int row, col[2];
     bool chapters;
     int ch_focus;
     Scroll ch_sc;
+    float ch_x, ch_y, ch_w, ch_h;   /* chapter panel, from the last draw */
+    bool prev_touching;
+    /* progress slider scrub (00.32): drag the knob, one seek on release */
+    bool scrubbing, scrub_live;
+    double scrub_s, scrub_e, scrub_t; /* span frozen at touch-down, target time */
 } S;
+
+#define CH_ROW 52.0f
+#define BAR_HIT_HALF_H 34.0f   /* generous vertical touch area around the slider */
+#define BAR_HIT_PAD_X 14.0f
+#define SCRUB_CANCEL_DY 110.0f /* finger this far above/below: scrub cancelled */
 
 void player_screen_enter(void) {
     S.row = 0;
     S.col[0] = K_PLAY;
     S.chapters = false;
+    S.scrubbing = false;
+}
+
+static float chapters_max(int n) {
+    float m = n * CH_ROW - 350;
+    return m > 0 ? m : 0;
 }
 
 static void open_chapters(void) {
@@ -48,7 +65,8 @@ static void open_chapters(void) {
     S.chapters = true;
     S.ch_focus = player_chapter_index();
     if (S.ch_focus < 0) S.ch_focus = 0;
-    S.ch_sc.y = S.ch_sc.target = S.ch_focus * 52.0f - 120 > 0 ? S.ch_focus * 52.0f - 120 : 0;
+    /* centred on the playing chapter only when the menu opens */
+    scroll_jump(&S.ch_sc, S.ch_focus * CH_ROW - 120, chapters_max(b->nchapters));
 }
 
 static void do_control(int k) {
@@ -66,15 +84,6 @@ static void do_pill(int p) {
     case P_SPEED: player_cycle_speed(); app_save_config(); break;
     case P_SLEEP: player_cycle_sleep(); break;
     case P_CHAPTERS: open_chapters(); break;
-    case P_DOWNLOAD: {
-        const BookDetail *b = player_book();
-        if (!b) break;
-        DlState st = dl_state(b->id, NULL);
-        if (st == DL_QUEUED || st == DL_ACTIVE) dl_pause(b->id);
-        else if (st == DL_DONE) app_toast("Saved on the memory card");
-        else if (dl_start(b->id) != 0) app_toast("Couldn't start the download");
-        break;
-    }
     case P_INFO: {
         const BookDetail *b = player_book();
         if (!b) break;
@@ -113,16 +122,40 @@ static void chapter_span(double t, double *start, double *end, int *index) {
     else { *start = 0; *end = player_duration(); }
 }
 
-static void on_tap_bar(int a, int b) {
-    (void)a; (void)b;
-    double s, e;
-    int ci;
-    chapter_span(player_position(), &s, &e, &ci);
-    float f = (app_tap_x() - RX) / RW;
-    if (f < 0) f = 0;
-    if (f > 1) f = 1;
-    player_jump(s + (e - s) * f);
+/* The slider handles its own touch (scrub_update); this only keeps a tap on
+ * it from reaching anything underneath. */
+static void on_tap_bar(int a, int b) { (void)a; (void)b; }
+
+/* Touch-down on the slider starts a scrub: the knob and times follow the
+ * finger, audio keeps playing, and one seek is made on release. A tap is a
+ * scrub without movement. Sliding far off vertically cancels it (release then
+ * does nothing; coming back resumes it). The slider shows the current chapter
+ * (the whole book without chapters); seeks are book-wide, across files. */
+static void scrub_update(const Input *in) {
+    bool down = in->touching && !S.prev_touching;
+    if (down && !S.scrubbing && player_book()
+        && scrub_hit(in->tx, in->ty, RX, RW, BAR_Y + 3, BAR_HIT_HALF_H, BAR_HIT_PAD_X)) {
+        int ci;
+        chapter_span(player_position(), &S.scrub_s, &S.scrub_e, &ci);
+        S.scrubbing = true;
+    }
+    if (!S.scrubbing) return;
+    if (in->touching) {
+        S.scrub_live = scrub_in_range(in->ty, BAR_Y + 3, SCRUB_CANCEL_DY);
+        S.scrub_t = scrub_target(in->tx, RX, RW, S.scrub_s, S.scrub_e);
+        return;
+    }
+    S.scrubbing = false;
+    if (S.scrub_live) {
+        dbg("player: scrub -> %.2f s", S.scrub_t);
+        player_jump(S.scrub_t);
+    }
+    S.scrub_live = false;
 }
+
+/* Tap on the dimmed area outside the chapter panel closes it (like Back). */
+static void on_tap_chapters_outside(int a, int b) { (void)a; (void)b; S.chapters = false; }
+static void on_tap_chapters_panel(int a, int b) { (void)a; (void)b; }
 
 static void on_tap_chapter(int i, int b) {
     (void)b;
@@ -151,11 +184,19 @@ void player_screen_update(const Input *in, float dt) {
         if (in->repeat & B_R) S.ch_focus = S.ch_focus + 6 < n ? S.ch_focus + 6 : n - 1;
         if (in->down & B_OK && n) { player_jump(b->chapters[S.ch_focus].start); S.chapters = false; }
         if (in->down & (B_BACK | B_TRIANGLE)) S.chapters = false;
-        float max = n * 52.0f - 350;
-        if (in->dragging) scroll_drag(&S.ch_sc, in->drag_dy, max > 0 ? max : 0);
-        else scroll_show(&S.ch_sc, S.ch_focus * 52.0f - 52, (S.ch_focus + 2) * 52.0f, 320, max > 0 ? max : 0);
+        float max = chapters_max(n);
+        bool in_panel = in->start_x >= S.ch_x && in->start_x < S.ch_x + S.ch_w
+                     && in->start_y >= S.ch_y && in->start_y < S.ch_y + S.ch_h;
+        if (in->touching && !S.prev_touching) scroll_stop(&S.ch_sc); /* finger down stops a fling */
+        /* Touch scrolls the whole list freely (with momentum) and stays where it
+         * is left; the D-pad keeps its selection visible. */
+        if (in->dragging && in_panel) scroll_drag(&S.ch_sc, in->drag_dy, max);
+        else scroll_show(&S.ch_sc, S.ch_focus * CH_ROW - CH_ROW, (S.ch_focus + 2) * CH_ROW, 320, max);
+        S.prev_touching = in->touching;
         return;
     }
+    scrub_update(in);
+    S.prev_touching = in->touching;
     if (in->down & (B_BACK | B_START)) { app_close_player(); return; }
     if (in->down & B_SQUARE) player_toggle();
     if (in->repeat & B_L) player_skip(-g_cfg.skip_back);
@@ -218,9 +259,13 @@ static void draw_chapters(void) {
     const BookDetail *b = player_book();
     if (!b) return;
     gfx_rect(0, 0, SCREEN_W, CONTENT_BOTTOM, gfx_alpha(0xFF000000, 0.6f));
-    float w = 620, h = 70 + b->nchapters * 52 + 16;
+    float w = 620, h = 70 + b->nchapters * CH_ROW + 16;
     if (h > 436) h = 436;
     float x = 170, y = 34 + (436 - h) / 2;
+    S.ch_x = x; S.ch_y = y; S.ch_w = w; S.ch_h = h;
+    /* hits: whole screen = close, panel = nothing, rows on top */
+    hit_add(0, 0, SCREEN_W, SCREEN_H, on_tap_chapters_outside, 0, 0);
+    hit_add(x, y, w, h, on_tap_chapters_panel, 0, 0);
     gfx_rrect(x, y, w, h, 18, C_PANEL);
     gfx_text(F_BOLD, 22, x + 24, y + 22, C_TEXT, "Chapters");
     char t[48];
@@ -231,8 +276,8 @@ static void draw_chapters(void) {
     vita2d_enable_clipping();
     vita2d_set_clip_rectangle((int)x, (int)top - 4, (int)(x + w), (int)(y + h - 12));
     for (int i = 0; i < b->nchapters; i++) {
-        float ry = top + i * 52 - S.ch_sc.y;
-        if (ry < top - 52 || ry > y + h) continue;
+        float ry = top + i * CH_ROW - S.ch_sc.y;
+        if (ry < top - CH_ROW || ry > y + h) continue;
         bool foc = i == S.ch_focus;
         if (foc) gfx_rrect(x + 12, ry, w - 24, 46, 10, C_PANEL2);
         if (i == cur) gfx_rrect(x + 12, ry + 12, 4, 22, 2, C_ACCENT);
@@ -244,11 +289,13 @@ static void draw_chapters(void) {
         gfx_fit(i == cur ? F_BOLD : F_REG, 17, b->chapters[i].title, w - 120 - tw - 30, title, sizeof title);
         gfx_text_vc(i == cur ? F_BOLD : F_REG, 17, x + 76, ry + 23, i == cur ? C_ACCENT : C_TEXT, title);
         gfx_text_right_vc(F_REG, 15, x + w - 30, ry + 23, C_SUB, tm);
-        hit_add(x + 12, ry, w - 24, 46, on_tap_chapter, i, 0);
+        /* only the visible part of a row is tappable (rows scroll under the header) */
+        float hy0 = ry < top - 4 ? top - 4 : ry, hy1 = ry + 46 > y + h - 12 ? y + h - 12 : ry + 46;
+        if (hy1 > hy0) hit_add(x + 12, hy0, w - 24, hy1 - hy0, on_tap_chapter, i, 0);
     }
     vita2d_disable_clipping();
     hint(G_DPAD, "Move");
-    hint(G_L, "Page");
+    hint2(G_L, G_R, "Page"); /* L = page up, R = page down */
     hint(g_ok(), "Play chapter");
     hint(g_back(), "Close");
 }
@@ -274,7 +321,7 @@ void player_screen_draw(void) {
         float cx = SCREEN_W / 2, cy = CONTENT_BOTTOM / 2;
         if (player_phase() == PL_OPENING) {
             draw_spinner(cx, cy - 16, 20, C_ACCENT);
-            gfx_text_center(F_REG, 17, cx, cy + 34, C_SUB, "Opening\xE2\x80\xA6");
+            gfx_text_center(F_REG, 17, cx, cy + 34, C_SUB, st ? st : "Opening book\xE2\x80\xA6");
         } else {
             gfx_icon(IC_CLOUD_OFF, cx, cy - 30, 40, C_ERROR);
             gfx_text_center(F_BOLD, 19, cx, cy + 18, C_TEXT, player_error()[0] ? player_error() : "Nothing playing");
@@ -283,10 +330,25 @@ void player_screen_draw(void) {
         return;
     }
 
-    covers_draw(b->id, COVER_X, COVER_Y, COVER, 1);
+    /* Thumbnail until audio is coming out of the speaker; only then the 500 px
+     * player cover is loaded/made (lowest priority, never before playback). */
+    if (engine_audio_started()) {
+        int li = lib_find_id(b->id);
+        const BookSummary *sm = li >= 0 ? lib_book(li) : NULL;
+        if (sm && sm->cover_path[0])
+            covers_full_request(b->id, sm->cover_path, b->ntracks > 0 ? b->tracks[0].path : "");
+    }
+    /* 256 px thumb (scaled up) cross-fading into the player cover. */
+    float fade = covers_full_fade(b->id);
+    /* The thumb fades out as the player cover fades in, so a transparent PNG
+     * never shows the thumb through its clear areas (v0.2.12). */
+    if (fade < 1) covers_draw(b->id, COVER_X, COVER_Y, COVER, 1 - fade);
+    if (fade > 0) covers_full_draw(b->id, COVER_X, COVER_Y, COVER, fade);
     double pos = player_position(), cs, ce;
     int ci;
     chapter_span(pos, &cs, &ce, &ci);
+    bool scrub = S.scrubbing && S.scrub_live;
+    if (scrub) { pos = S.scrub_t; cs = S.scrub_s; ce = S.scrub_e; } /* show the target while dragging */
     char line[256], fit[256];
     if (ci >= 0) snprintf(line, sizeof line, "CHAPTER %d OF %d", ci + 1, b->nchapters);
     else snprintf(line, sizeof line, "NOW PLAYING");
@@ -303,14 +365,14 @@ void player_screen_draw(void) {
     double span = ce - cs > 0 ? ce - cs : 1;
     float frac = (float)((pos - cs) / span);
     draw_progress_bar(RX, BAR_Y, RW, 6, frac, C_ACCENT, gfx_alpha(C_TEXT, 0.18f));
-    gfx_circle(RX + RW * (frac < 0 ? 0 : frac > 1 ? 1 : frac), BAR_Y + 3, 8, C_TEXT);
-    hit_add(RX - 8, BAR_Y - 18, RW + 16, 42, on_tap_bar, 0, 0);
+    gfx_circle(RX + RW * (frac < 0 ? 0 : frac > 1 ? 1 : frac), BAR_Y + 3, scrub ? 12 : 8, scrub ? C_ACCENT : C_TEXT);
+    hit_add(RX - BAR_HIT_PAD_X, BAR_Y + 3 - BAR_HIT_HALF_H, RW + 2 * BAR_HIT_PAD_X, 2 * BAR_HIT_HALF_H, on_tap_bar, 0, 0);
     char a[32], r[32];
     fmt_time(pos - cs, a, sizeof a);
     fmt_time(ce - pos, r + 1, sizeof r - 1);
     r[0] = '-';
-    gfx_text(F_REG, 15, RX, BAR_Y + 18, C_SUB, a);
-    gfx_text_right(F_REG, 15, RX + RW, BAR_Y + 18, C_SUB, r);
+    gfx_text(F_REG, 15, RX, BAR_Y + 18, scrub ? C_ACCENT : C_SUB, a);
+    gfx_text_right(F_REG, 15, RX + RW, BAR_Y + 18, scrub ? C_ACCENT : C_SUB, r);
     char bt[32], bd[32], left[32];
     fmt_time(pos, bt, sizeof bt);
     fmt_time(b->duration, bd, sizeof bd);
@@ -329,9 +391,9 @@ void player_screen_draw(void) {
     control(K_NEXT, cx + 96, 30, IC_NEXT, NULL);
     control(K_FWD, cx + 192, 30, IC_FWD, nf);
 
-    /* options: three pills, then download and book-details icons */
+    /* options: three pills, then book-details icon */
     float ib = PILL_H, gap = 12;
-    float pw = (RW - 2 * ib - 4 * gap) / 3;
+    float pw = (RW - ib - 3 * gap) / 3;
     char sp[16], sl[32];
     snprintf(sp, sizeof sp, "%g\xC3\x97", player_speed());
     const SleepTimer *slp = player_sleep();
@@ -340,27 +402,15 @@ void player_screen_draw(void) {
     pill(P_SPEED, RX, pw, IC_SPEED, sp, player_speed() < 0.99f || player_speed() > 1.01f);
     pill(P_SLEEP, RX + (pw + gap), pw, IC_MOON, slp->mode == SLEEP_OFF ? "Sleep" : sl, slp->mode != SLEEP_OFF);
     pill(P_CHAPTERS, RX + 2 * (pw + gap), pw, IC_LIST, "Chapters", false);
-    float dfrac = 0;
-    DlState ds = dl_state(b->id, &dfrac);
-    int dl_icon = ds == DL_DONE ? IC_CHECK : ds == DL_QUEUED ? IC_CLOCK : ds == DL_ACTIVE ? IC_PAUSE : IC_DOWNLOAD;
-    uint32_t dl_c = ds == DL_DONE ? C_ACCENT : ds == DL_FAILED ? C_ERROR : C_TEXT;
-    icon_button(P_DOWNLOAD, RX + 3 * (pw + gap), dl_icon, dl_c, ds == DL_ACTIVE || ds == DL_PAUSED ? dfrac : -1);
-    icon_button(P_INFO, RX + 3 * (pw + gap) + ib + gap, IC_INFO, C_TEXT, -1);
+    icon_button(P_INFO, RX + 3 * (pw + gap), IC_INFO, C_TEXT, -1);
 
     if (S.chapters) {
         draw_chapters();
         return;
     }
-    if (S.row == 1 && S.col[1] == P_DOWNLOAD) {
-        static char t[40];
-        snprintf(t, sizeof t, ds == DL_NONE ? "Download" : ds == DL_ACTIVE ? "Pause download (%d%%)" :
-                 ds == DL_QUEUED ? "Pause download" : ds == DL_DONE ? "Saved" : "Resume download", (int)(dfrac * 100));
-        hint(g_ok(), t);
-    } else if (S.row == 1 && S.col[1] == P_INFO) {
-        hint(g_ok(), "Book details");
-    }
+    if (S.row == 1 && S.col[1] == P_INFO) hint(g_ok(), "Book details");
     hint(G_SQUARE, player_playing() ? "Pause" : "Play");
-    hint(G_L, "Skip");
+    hint2(G_L, G_R, "Skip"); /* L = skip back, R = skip forward */
     hint(G_TRIANGLE, "Chapters");
     hint(G_SELECT, "Screen off");
     hint(g_back(), "Back");

@@ -1,6 +1,6 @@
 /* Plain data types shared by the core, platform and UI layers. */
-#ifndef ABSVITA_MODELS_H
-#define ABSVITA_MODELS_H
+#ifndef VITAVOX_MODELS_H
+#define VITAVOX_MODELS_H
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -12,7 +12,7 @@ typedef struct {
 typedef struct {
     int index;
     char ino[40];
-    char content_url[160]; /* "/api/items/<id>/file/<ino>" */
+    char path[320];         /* local file path */
     char codec[16];        /* "aac", "mp3", ... */
     char ext[8];           /* ".m4b", ".mp3", ... */
     char title[96];        /* usually the file name */
@@ -28,11 +28,13 @@ typedef struct {
     char series[96];
     double duration;
     uint64_t added_at;
-    /* progress (merged from /api/me) */
     float progress;
     double current_time;
     bool finished;
     uint64_t progress_updated; /* ms since epoch */
+    char path[320];       /* book folder, or the single file at the library root */
+    char cover_path[320]; /* full-size source: folder image, or the embedded-art PNG */
+    char thumb_path[320]; /* 256 px menu thumbnail in the covers folder, may be empty */
 } BookSummary;
 
 typedef struct {
@@ -46,6 +48,7 @@ typedef struct {
     Track *tracks; /* malloc'd */
     int nchapters;
     Chapter *chapters; /* malloc'd */
+    int provisional;   /* 00.36: tracks whose length is still an estimate (opening a big book) */
 } BookDetail;
 
 typedef struct {

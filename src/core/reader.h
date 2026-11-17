@@ -1,7 +1,7 @@
 /* Random-access byte reader. Implemented over memory, stdio files (SD card)
  * and the HTTP ring buffer (src/plat/httpsrc.c). */
-#ifndef ABSVITA_READER_H
-#define ABSVITA_READER_H
+#ifndef VITAVOX_READER_H
+#define VITAVOX_READER_H
 #include <stdint.h>
 #include <stdio.h>
 

@@ -5,27 +5,28 @@
 #include <psp2/ctrl.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/touch.h>
+
+#include "touchmath.h"
 #include <string.h>
 
 #define REPEAT_DELAY_US 320000
 #define REPEAT_RATE_US 70000
 #define STICK_DEAD 56
-#define TAP_SLOP 18.0f
 
 static bool g_cross = true;
 static uint32_t g_prev;
 static uint64_t g_since[32], g_next[32];
 static struct { bool down; float x, y, sx, sy; uint64_t t0; bool moved; } T;
 
-#ifdef ABSVITA_AUTOPILOT
-/* Test builds only: scripted presses from ux0:data/ABSvita/autopilot.txt, one
+#ifdef VITAVOX_AUTOPILOT
+/* Test builds only: scripted presses from ux0:data/VitaVox/autopilot.txt, one
  * "<wait ms> <button>" per line (button: up down left right ok back square
  * triangle l r start select none). Each step is logged so screenshots can be timed. */
 #include <stdio.h>
 #include "dbg.h"
 static struct { int n, i; int wait[256]; uint32_t btn[256]; uint64_t next, release; uint32_t cur; } AP;
 static void autopilot_load(void) {
-    FILE *f = fopen("ux0:data/ABSvita/autopilot.txt", "r");
+    FILE *f = fopen("ux0:data/VitaVox/autopilot.txt", "r");
     if (!f) return;
     char name[32];
     int w;
@@ -59,7 +60,7 @@ static uint32_t autopilot(uint64_t now) {
 #endif
 
 void input_init(bool enter_is_cross) {
-#ifdef ABSVITA_AUTOPILOT
+#ifdef VITAVOX_AUTOPILOT
     autopilot_load();
 #endif
     g_cross = enter_is_cross;
@@ -91,11 +92,12 @@ void input_poll(Input *in) {
         else b |= ly < 0 ? B_UP : B_DOWN;
     }
     uint64_t now = sceKernelGetProcessTimeWide();
-#ifdef ABSVITA_AUTOPILOT
+#ifdef VITAVOX_AUTOPILOT
     b |= autopilot(now);
 #endif
     in->held = b;
     in->down = b & ~g_prev;
+    in->released = g_prev & ~b;
     in->repeat = in->down;
     for (int i = 0; i < 12; i++) {
         uint32_t m = 1u << i;
@@ -120,7 +122,7 @@ void input_poll(Input *in) {
             T.t0 = now;
             T.moved = false;
         }
-        if (!T.moved && hypotf(x - T.sx, y - T.sy) > TAP_SLOP) T.moved = true;
+        if (!T.moved && touch_moved(T.sx, T.sy, x, y)) T.moved = true;
         if (T.moved) {
             in->dragging = true;
             in->drag_dx = x - T.x;
@@ -135,7 +137,7 @@ void input_poll(Input *in) {
         in->start_y = T.sy;
     } else if (T.down) {
         T.down = false;
-        if (!T.moved && now - T.t0 < 500000) {
+        if (touch_is_tap(T.moved, now - T.t0)) {
             in->tap = true;
             in->tap_x = T.sx;
             in->tap_y = T.sy;

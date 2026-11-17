@@ -25,8 +25,15 @@ static const char *skip_article(const char *s) {
 static const BookSummary *g_books;
 static SortMode g_mode;
 
+/* Number-aware, case-insensitive, leading The/A/An ignored:
+ * "Book 9" < "Book 10", "Vol. 2" < "Vol. 10". Titles the natural compare
+ * calls equal ("Book 02" / "Book 2") fall back to plain case-insensitive
+ * order so the result is stable. */
 static int cmp_title(const BookSummary *a, const BookSummary *b) {
-    return strcasecmp(skip_article(a->title), skip_article(b->title));
+    const char *ta = skip_article(a->title), *tb = skip_article(b->title);
+    int c = str_natcasecmp(ta, tb);
+    if (!c) c = strcasecmp(ta, tb);
+    return c;
 }
 
 static int cmp(const void *pa, const void *pb) {

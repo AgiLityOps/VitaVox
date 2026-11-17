@@ -1,40 +1,64 @@
 # Host (macOS/Linux) build of the hardware-independent core + unit tests.
 #   make -f Makefile.host test
+#   make -f Makefile.host test-decode   # ffstream+engine vs a host FFmpeg (FFMPEG_HOST)
+# Default tests do not require FFmpeg: stream, scanner, engine and player stay out.
 CC      ?= cc
-# libmpg123 and libcurl: pkg-config when available (Linux CI), else Homebrew
-MPG_CFLAGS := $(shell pkg-config --cflags libmpg123 2>/dev/null || echo -I/opt/homebrew/opt/mpg123/include)
-MPG_LIBS   := $(shell pkg-config --libs libmpg123 2>/dev/null || echo -L/opt/homebrew/opt/mpg123/lib -lmpg123)
 BUILD   := build-host
-CFLAGS  := -DAPP_VERSION=\"0.1.1\" -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
+CFLAGS  := -DAPP_VERSION=\"00.39\" -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
            -fsanitize=address,undefined -fno-omit-frame-pointer \
-           -Isrc -Isrc/core -Isrc/net -Isrc/ui $(MPG_CFLAGS) -Ivendor/cjson -Ivendor/sonic -Ivendor/helix-aac -Ivendor/stb -Itests
-LDFLAGS := -fsanitize=address,undefined -lm -lcurl $(MPG_LIBS) -lpthread
+           -Isrc -Isrc/core -Isrc/ui -Ivendor/cjson -Ivendor/sonic -Ivendor/stb -Itests
+LDFLAGS := -fsanitize=address,undefined -lm -lpthread
 
-CORE    := $(wildcard src/core/*.c) $(wildcard src/net/*.c) src/ui/icons.c
-VENDOR  := vendor/cjson/cJSON.c vendor/sonic/sonic.c $(wildcard vendor/helix-aac/*.c)
-TESTS   := $(wildcard tests/*.c)
+# 00.37: reduced-scale JPEG decode (libjpeg-turbo, as on the Vita). Optional on
+# the host: without it image.c falls back to stb_image and the scaled-decode
+# checks are skipped. Build: cmake libjpeg-turbo -DCMAKE_INSTALL_PREFIX=/tmp/jpeg-host
+JPEG_HOST ?= /tmp/jpeg-host
+ifneq ($(wildcard $(JPEG_HOST)/lib/libjpeg.a),)
+CFLAGS  += -DVA_HAVE_LIBJPEG -I$(JPEG_HOST)/include
+LDFLAGS += $(JPEG_HOST)/lib/libjpeg.a
+endif
+
+CORE_ALL := $(wildcard src/core/*.c)
+CORE    := $(filter-out src/core/ffstream.c src/core/scanner.c src/core/engine.c src/core/player.c src/core/catbuild.c,$(CORE_ALL))
+CORE    += src/ui/icons.c
+VENDOR  := vendor/cjson/cJSON.c vendor/sonic/sonic.c
+TESTS   := $(filter-out tests/test_engine.c tests/test_pipeline.c tests/test_ffstream_host.c tests/test_library_host.c tests/test_mp4lazy_host.c tests/test_open_priority_host.c tests/test_mp3scan_host.c tests/test_desc_host.c,$(wildcard tests/*.c))
+
+# Host FFmpeg prefix used by test-decode (built from the same 9.0.2 tree, no cross).
+FFMPEG_HOST ?= /tmp/ffmpeg-host
 OBJS    := $(patsubst %.c,$(BUILD)/%.o,$(CORE) $(VENDOR) $(TESTS))
 
-.PHONY: test nettest clean fixtures
-test: $(BUILD)/tests_run fixtures
+.PHONY: test test-decode clean
+test: $(BUILD)/tests_run
 	./$(BUILD)/tests_run
 
-# Runs every suite with the network tests enabled against a local mock server.
-MOCK_PORT ?= 18081
-nettest: $(BUILD)/tests_run fixtures
-	@sh tools/gen_media.sh tests/media >/dev/null
-	@python3 tools/mock_abs.py --port $(MOCK_PORT) --host 127.0.0.1 > $(BUILD)/mock.log 2>&1 & echo $$! > $(BUILD)/mock.pid; sleep 1.5; \
-	MOCK_ABS=http://127.0.0.1:$(MOCK_PORT) ./$(BUILD)/tests_run; rc=$$?; kill `cat $(BUILD)/mock.pid`; exit $$rc
+DECODE_SRC := src/core/ffstream.c src/core/engine.c src/core/osal.c src/core/timeline.c \
+              src/core/dbg.c src/core/strutil.c src/core/pathutil.c src/core/scanner.c \
+              src/core/quit.c src/core/tagart.c src/core/mp3info.c src/core/catbuild.c src/core/libcache.c \
+              src/core/image.c src/core/probecache.c src/core/progress.c src/core/mp4lazy.c src/core/bookcache.c \
+              src/core/audiodiag.c src/core/wavrec.c \
+              vendor/sonic/sonic.c vendor/cjson/cJSON.c \
+              tests/test_ffstream_host.c tests/test_library_host.c tests/test_mp4lazy_host.c tests/test_open_priority_host.c tests/test_mp3scan_host.c tests/test_desc_host.c
+DECODE_CFLAGS := $(CFLAGS) -I$(FFMPEG_HOST)/include
+DECODE_LIBS := -L$(FFMPEG_HOST)/lib -lavformat -lavcodec -lswresample -lavutil -lm -lpthread /usr/lib/x86_64-linux-gnu/libz.so.1
+ifneq ($(wildcard $(JPEG_HOST)/lib/libjpeg.a),)
+DECODE_LIBS += $(JPEG_HOST)/lib/libjpeg.a
+endif
 
-fixtures:
-	@sh tests/gen_fixtures.sh
+$(BUILD)/test_ffstream_host: $(DECODE_SRC)
+	@mkdir -p $(BUILD)
+	@test -f $(FFMPEG_HOST)/lib/libavcodec.a || { echo "Missing $(FFMPEG_HOST). Build host FFmpeg first."; exit 1; }
+	$(CC) $(DECODE_CFLAGS) $(DECODE_SRC) $(DECODE_LIBS) -o $@
+
+test-decode: $(BUILD)/test_ffstream_host
+	./$(BUILD)/test_ffstream_host
 
 $(BUILD)/tests_run: $(OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
 
 $(BUILD)/vendor/%.o: vendor/%.c
 	@mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O2 -g -w -fsanitize=address -Ivendor/helix-aac -Ivendor/cjson -Ivendor/sonic -c $< -o $@
+	$(CC) -std=gnu11 -O2 -g -w -fsanitize=address -Ivendor/cjson -Ivendor/sonic -c $< -o $@
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)

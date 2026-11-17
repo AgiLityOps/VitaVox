@@ -1,6 +1,6 @@
 /* The system keyboard (IME dialog), non-blocking. */
-#ifndef ABSVITA_IME_H
-#define ABSVITA_IME_H
+#ifndef VITAVOX_IME_H
+#define VITAVOX_IME_H
 #include <stdbool.h>
 #include <stddef.h>
 

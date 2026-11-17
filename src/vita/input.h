@@ -1,6 +1,6 @@
 /* Buttons (with key repeat and the left stick as a d-pad) and front-touch gestures. */
-#ifndef ABSVITA_INPUT_H
-#define ABSVITA_INPUT_H
+#ifndef VITAVOX_INPUT_H
+#define VITAVOX_INPUT_H
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -15,6 +15,7 @@ enum {
 typedef struct {
     uint32_t down;     /* pressed this frame */
     uint32_t held;
+    uint32_t released; /* went up this frame */
     uint32_t repeat;   /* down + auto-repeat for directions and L/R */
     bool any;          /* any button pressed this frame */
     /* touch (screen pixels) */

@@ -1,8 +1,8 @@
 /* Series and author groupings built from the library list (the minified
  * items carry "seriesName" like "Dune #1, Other #2" and "authorName" like
  * "A, B"). Pure C. */
-#ifndef ABSVITA_GROUPS_H
-#define ABSVITA_GROUPS_H
+#ifndef VITAVOX_GROUPS_H
+#define VITAVOX_GROUPS_H
 #include <stddef.h>
 
 #include "models.h"

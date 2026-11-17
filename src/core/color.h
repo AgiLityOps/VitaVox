@@ -1,5 +1,5 @@
-#ifndef ABSVITA_COLOR_H
-#define ABSVITA_COLOR_H
+#ifndef VITAVOX_COLOR_H
+#define VITAVOX_COLOR_H
 #include <stdint.h>
 
 typedef struct { uint8_t r, g, b; } Rgb;

@@ -50,4 +50,5 @@ void book_detail_free(BookDetail *b) {
     b->tracks = NULL;
     b->chapters = NULL;
     b->ntracks = b->nchapters = 0;
+    b->provisional = 0;
 }

@@ -68,7 +68,7 @@ static float icon_sdf(int id, V p) {
     case IC_BACK:
     case IC_FWD: {
         V q = id == IC_FWD ? (V){-p.x, p.y} : p;
-        float d = sd_arc(q, (V){0, 0.04f}, 0.62f, W, -PI * 0.15f, PI * 1.5f);
+        float d = sd_arc(q, (V){0, 0.04f}, 0.62f, W, -PI * 0.5f, PI * 1.15f);
         /* arrow head at the arc start (top), pointing left */
         V t[3] = {{-0.05f, -0.82f}, {-0.05f, -0.32f}, {-0.38f, -0.57f}};
         return uni(d, sd_poly(q, t, 3) - 0.02f);
@@ -195,6 +195,12 @@ static float icon_sdf(int id, V p) {
         float d = outline(sd_circle(p, (V){0, 0}, 0.62f), W * 0.9f);
         d = uni(d, sd_circle(p, (V){0, -0.3f}, 0.1f));
         return uni(d, sd_seg(p, (V){0, -0.06f}, (V){0, 0.34f}, W));
+    }
+    case IC_BOLT: {
+        /* 00.38: charging lightning bolt (two overlapping triangles) */
+        V a[3] = {{0.30f, -0.92f}, {-0.42f, 0.12f}, {0.10f, 0.12f}};
+        V b[3] = {{-0.30f, 0.92f}, {0.42f, -0.12f}, {-0.10f, -0.12f}};
+        return uni(sd_poly(p, a, 3), sd_poly(p, b, 3)) - 0.02f;
     }
     case IC_HOME: {
         V roof[3] = {{-0.66f, -0.02f}, {0, -0.62f}, {0.66f, -0.02f}};

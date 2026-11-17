@@ -1,6 +1,6 @@
 /* Sorting and searching the in-memory library list. */
-#ifndef ABSVITA_LIBRARY_H
-#define ABSVITA_LIBRARY_H
+#ifndef VITAVOX_LIBRARY_H
+#define VITAVOX_LIBRARY_H
 #include "models.h"
 
 typedef enum { SORT_TITLE, SORT_AUTHOR, SORT_RECENT, SORT_COUNT } SortMode;
